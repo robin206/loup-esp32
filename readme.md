@@ -1,139 +1,61 @@
-🐺 Loupgarou LED Controller – ESP32 + BLE
-Contrôleur de LEDs pour l’application Loup Garou, basé sur un ESP32 WROOM et un bandeau WS2812B.
-Communication via Bluetooth Low Energy (BLE) et animations synchronisées avec les phases du jeu.
+# Loup Garou LED controller (ESP32 + BLE)
 
-✨ Fonctionnalités
-🎨 Ambiances lumineuses :
+Contrôleur de LEDs pour l'application Loup Garou, basé sur un ESP32 WROOM et un bandeau WS2812B. Il reçoit des commandes texte en Bluetooth Low Energy et joue des ambiances et des animations synchronisées avec les sons du sampler.
 
-Jour
+Version courante: 1.7b, dans `loup_garou_v1_7b/`. Le dossier contient `loup_garou_v1_7b.ino` et `Flash.h`, qui doivent rester ensemble. Le dossier du sketch doit porter le même nom que le `.ino`.
 
-Nuit
+## Matériel
 
-Vote
+- ESP32 WROOM
+- Bandeau WS2812B de 300 LEDs, données sur le GPIO 5
+- Alimentation 5 V 20 A, masse commune avec l'ESP32
+- Luminosité par défaut de 150 sur 255 et limite de courant logicielle à 15 A
 
-Off
+## Dépendances Arduino
 
-🔊 Animations “Sampler” synchronisées avec les sons du jeu :
+- Bibliothèque FastLED
+- Cartes ESP32 (BLE Arduino inclus), compatible avec les cores 2.x et 3.x
 
-Loup
+## Protocole BLE
 
-Clocher
+| Élément | Valeur |
+|---|---|
+| Nom annoncé | LoupGarou_LED |
+| Service | d752c5fb-1380-4cd5-b0ef-cac7d72cff20 |
+| Écriture (application vers ESP32) | 2d30c082-f39f-4ce6-923f-3484ea480596 |
+| Notification (ESP32 vers application) | 9b2f4d3a-5c1e-4a7b-8f6d-1e2c3b4a5d60 |
 
-Horloge
+Ces UUID sont personnalisés, ce ne sont pas ceux du Nordic UART Service. Les commandes sont du texte UTF-8, insensible à la casse.
 
-Tonnerre
+## Commandes
 
-Violon
+| Commande | Effet |
+|---|---|
+| jour, nuit, vote, off | Fondu de 1 s vers l'ambiance choisie |
+| loup | Respiration de l'ambiance vers le rouge puis retour, 7 s |
+| clocher | 12 flashs blancs de 300 ms sur les dongs, 25 s |
+| horloge | 3 grands flashs jaunes et 5 tics plus légers, calés sur le son, 14,5 s |
+| tonnerre | 3 flashs blancs sur l'ambiance, environ 2 s |
+| violon | Serpent vert de 60 LEDs qui traverse le bandeau en 2,3 s |
+| lum:N | Luminosité de 10 à 255 |
+| leds:N | Nombre de LEDs utilisées, de 1 à 300 |
 
-📡 Communication BLE via le protocole Nordic UART Service (NUS)
+Les animations gardent la couleur d'ambiance en fond et y reviennent à la fin. Le clocher et l'horloge sont chronométrés depuis le départ de la commande, à partir des instants mesurés dans les fichiers audio. Les constantes `CLOCHER_OFFSET_MS` et `HORLOGE_OFFSET_MS` permettent de compenser la latence Bluetooth.
 
-💡 Transitions douces entre ambiances
+## Retour d'état
 
-🚀 Animation de démarrage
+L'ESP32 envoie une notification à la fin de chaque commande.
 
-🔌 Compatible WS2812B (FastLED)
+| Notification | Signification |
+|---|---|
+| ok:jour | Ambiance appliquée (jour, nuit, vote ou off) |
+| done:loup | Animation terminée |
+| lum:150 | Luminosité appliquée |
+| leds:120 | Nombre de LEDs appliqué |
+| err:xxx | Commande inconnue ou invalide |
 
-🧩 Matériel requis
-ESP32 WROOM
+## Fonctionnement
 
-Bandeau LED WS2812B (jusqu’à 300 LEDs)
+Le callback BLE mémorise seulement la dernière commande reçue. La boucle principale l'exécute, ce qui libère la pile BLE pendant les animations. Une commande reçue pendant une animation remplace la précédente et ne démarre qu'à la fin de l'animation en cours.
 
-Alimentation 5V adaptée au nombre de LEDs
-
-Câblage :
-
-LED_PIN = GPIO 5
-
-GND commun entre ESP32 et alimentation LEDs
-
-📦 Dépendances Arduino
-Dans l’IDE Arduino, installer :
-
-FastLED
-
-ESP32 BLE Arduino (natif dans les cartes ESP32)
-
-🔧 Installation
-Installer les cartes ESP32 dans Arduino IDE
-
-Charger le fichier .ino dans l’ESP32
-
-Alimenter le bandeau LED
-
-Rechercher l’appareil BLE :
-LoupGarou_LED
-
-📡 Protocole BLE
-Le projet utilise le Nordic UART Service (NUS) :
-
-Élément	UUID
-Service	d752c5fb-1380-4cd5-b0ef-cac7d72cff20
-RX Characteristic	2d30c082-f39f-4ce6-923f-3484ea480596
-
-
-📤 Commandes disponibles
-Envoyer une chaîne de texte via BLE :
-
-Ambiances
-Code
-jour
-nuit
-vote
-off
-Animations
-Code
-loup
-clocher
-horloge
-tonnerre
-violon
-🎬 Aperçu des animations
-🌞 Ambiances
-Transitions douces (1 seconde) entre les couleurs prédéfinies.
-
-🐺 Loup
-Alternance rouge/noir pendant 10 secondes.
-
-🔔 Clocher
-12 flashs blancs espacés comme les coups de cloche.
-
-🕰 Horloge
-Flashs synchronisés avec les pics audio (table de timings).
-
-⚡ Tonnerre
-Flashs blancs avec variations naturelles.
-
-🎻 Violon
-Pulsations vertes répétées.
-
-🧠 Architecture du code
-handleCommand() : interprète les commandes BLE
-
-startSampler() : déclenche les animations
-
-transitionToColor() : interpolation douce entre couleurs
-
-RXCallback : réception BLE
-
-setup() : initialisation FastLED + BLE
-
-loop() : callbacks BLE uniquement
-
-🚀 Animation de démarrage
-Un balayage blanc progressif sur toutes les LEDs, puis extinction.
-
-📁 Structure du dépôt
-Code
-/Loupgarou-ESP32
- ├── src/
- │    └── loupgarou_led.ino
- ├── README.md
- └── LICENSE (optionnel)
-🛠 Améliorations possibles
-Ajout d’une caractéristique BLE TX pour retour d’état
-
-Mode “fade” pour les animations
-
-Gestion d’un nombre variable de LEDs via BLE
-
-Intégration avec une app mobile dédiée
+La documentation détaillée de la version 1.6 se trouve dans `docs/retro-documentation-v1.6.md`.
