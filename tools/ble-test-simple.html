@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contrôle des lumières via BLE</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 22px; }
+    h2 { font-size: 15px; margin: 22px 0 8px; color: #444; }
+    button { padding: 8px 14px; margin: 0 6px 6px 0; cursor: pointer; }
+    input[type=range] { width: 100%; max-width: 420px; }
+    input[type=number] { width: 80px; padding: 6px; }
+    #status { padding: 8px 10px; border-radius: 6px; background: #eee; margin-bottom: 8px; }
+    #status.ok { background: #d9f2de; }
+    #status.ko { background: #f8d9d9; }
+    #log { font-family: ui-monospace, monospace; font-size: 13px; background: #111; color: #cfd6e4;
+           padding: 10px; border-radius: 6px; height: 180px; overflow: auto; white-space: pre-wrap; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <h1>Contrôle des lumières</h1>
+
+  <div id="status">Non connecté</div>
+  <button onclick="connectBLE()">Connecter</button>
+  <button onclick="disconnectBLE()">Déconnecter</button>
+
+  <h2>Ambiances</h2>
+  <button onclick="sendCommand('jour')">Jour</button>
+  <button onclick="sendCommand('nuit')">Nuit</button>
+  <button onclick="sendCommand('vote')">Vote</button>
+  <button onclick="sendCommand('off')">Off</button>
+
+  <h2>Animations</h2>
+  <button onclick="sendCommand('loup')">Loup</button>
+  <button onclick="sendCommand('clocher')">Clocher</button>
+  <button onclick="sendCommand('horloge')">Horloge</button>
+  <button onclick="sendCommand('tonnerre')">Tonnerre</button>
+  <button onclick="sendCommand('violon')">Violon</button>
+
+  <h2>Luminosité (10 à 255, 150 par défaut au démarrage)</h2>
+  <div class="row">
+    <input id="lum" type="range" min="10" max="255" step="1" value="150">
+    <strong id="lumValue">150</strong>
+  </div>
+  <p style="margin:8px 0">
+    <button onclick="setBrightness(100)">100</button>
+    <button onclick="setBrightness(150)">150</button>
+    <button onclick="setBrightness(200)">200</button>
+    <button onclick="setBrightness(255)">255</button>
+  </p>
+  <p style="color:#666;font-size:13px;margin-top:0">
+    La luminosité n'est visible que si une ambiance est allumée (jour, nuit ou vote).
+    Le curseur envoie la valeur quand tu le relâches.
+    Elle revient à 150 au redémarrage de l'ESP32.
+  </p>
+
+  <h2>Nombre de LEDs (1 à 300)</h2>
+  <div class="row">
+    <input id="leds" type="number" min="1" max="300" value="300">
+    <button onclick="setLeds(document.getElementById('leds').value)">Appliquer</button>
+  </div>
+
+  <h2>Journal</h2>
+  <div id="log"></div>
+
+  <script>
+    const SERVICE_UUID = 'd752c5fb-1380-4cd5-b0ef-cac7d72cff20';
+    const RX_UUID = '2d30c082-f39f-4ce6-923f-3484ea480596';   // écriture
+    const TX_UUID = '9b2f4d3a-5c1e-4a7b-8f6d-1e2c3b4a5d60';   // notifications (firmware 1.7b)
+
+    let bleDevice = null;
+    let rxChar = null;
+    let connecting = null;
+
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+
+    function log(msg) {
+      const t = new Date().toLocaleTimeString();
+      logEl.textContent += `[${t}] ${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+      console.log(msg);
+    }
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls || '';
+    }
+
+    function onNotification(event) {
+      const text = new TextDecoder().decode(event.target.value);
+      log(`ESP32 : ${text}`);
+      if (text.startsWith('lum:')) {
+        const v = parseInt(text.slice(4), 10);
+        if (!isNaN(v)) {
+          document.getElementById('lum').value = v;
+          document.getElementById('lumValue').textContent = v;
+        }
+      }
+    }
+
+    function onDisconnected() {
+      log('Déconnecté du périphérique');
+      rxChar = null;
+      setStatus('Non connecté', 'ko');
+    }
+
+    async function connectBLE() {
+      if (rxChar && bleDevice && bleDevice.gatt.connected) return true;
+      if (connecting) return connecting;
+      connecting = (async () => {
+        try {
+          if (!navigator.bluetooth) {
+            throw new Error('Web Bluetooth indisponible (utilise Chrome ou Edge, en https ou en fichier local)');
+          }
+          setStatus('Connexion...', '');
+          if (!bleDevice) {
+            bleDevice = await navigator.bluetooth.requestDevice({
+              filters: [{ services: [SERVICE_UUID] }]
+            });
+            bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+          }
+          const server = await bleDevice.gatt.connect();
+          const service = await server.getPrimaryService(SERVICE_UUID);
+          rxChar = await service.getCharacteristic(RX_UUID);
+
+          try {
+            const txChar = await service.getCharacteristic(TX_UUID);
+            await txChar.startNotifications();
+            txChar.addEventListener('characteristicvaluechanged', onNotification);
+            log('Notifications activées (firmware 1.7b)');
+          } catch (e) {
+            log('Pas de caractéristique de notification : le firmware n\'est probablement pas la 1.7b');
+          }
+
+          setStatus('Connecté à ' + (bleDevice.name || 'LoupGarou_LED'), 'ok');
+          log('Connecté au périphérique BLE');
+          return true;
+        } catch (error) {
+          log('Erreur de connexion BLE : ' + error.message);
+          setStatus('Erreur de connexion', 'ko');
+          rxChar = null;
+          return false;
+        } finally {
+          connecting = null;
+        }
+      })();
+      return connecting;
+    }
+
+    function disconnectBLE() {
+      if (bleDevice && bleDevice.gatt.connected) bleDevice.gatt.disconnect();
+      rxChar = null;
+    }
+
+    async function sendCommand(command) {
+      if (!rxChar || !bleDevice || !bleDevice.gatt.connected) {
+        const ok = await connectBLE();
+        if (!ok) return false;
+      }
+      const data = new TextEncoder().encode(command);
+      try {
+        if (rxChar.writeValueWithResponse) {
+          await rxChar.writeValueWithResponse(data);
+        } else {
+          await rxChar.writeValue(data);
+        }
+        log(`Commande envoyée : ${command}`);
+        return true;
+      } catch (error) {
+        log('Erreur d\'envoi de commande : ' + error.message);
+        return false;
+      }
+    }
+
+    function setBrightness(value) {
+      const v = Math.max(10, Math.min(255, parseInt(value, 10) || 150));
+      document.getElementById('lum').value = v;
+      document.getElementById('lumValue').textContent = v;
+      return sendCommand('lum:' + v);
+    }
+
+    function setLeds(value) {
+      const n = Math.max(1, Math.min(300, parseInt(value, 10) || 300));
+      document.getElementById('leds').value = n;
+      return sendCommand('leds:' + n);
+    }
+
+    const lumSlider = document.getElementById('lum');
+    lumSlider.addEventListener('input', () => {
+      document.getElementById('lumValue').textContent = lumSlider.value;
+    });
+    lumSlider.addEventListener('change', () => setBrightness(lumSlider.value));
+  </script>
+</body>
+</html>

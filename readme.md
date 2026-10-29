@@ -59,3 +59,7 @@ L'ESP32 envoie une notification à la fin de chaque commande.
 Le callback BLE mémorise seulement la dernière commande reçue. La boucle principale l'exécute, ce qui libère la pile BLE pendant les animations. Une commande reçue pendant une animation remplace la précédente et ne démarre qu'à la fin de l'animation en cours.
 
 La documentation détaillée de la version 1.6 se trouve dans `docs/retro-documentation-v1.6.md`.
+
+## Outils de test
+
+Le dossier `tools/` contient `testeur-led.html` (aperçu simulé des animations et pilotage du vrai bandeau par Bluetooth, avec les sons du sampler) et `ble-test-simple.html`. Voir `tools/README.md`. La page de test doit être régénérée quand les animations changent, la procédure est dans `tools/simulateur/README.md`.

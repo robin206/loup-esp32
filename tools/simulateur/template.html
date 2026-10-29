@@ -1,0 +1,161 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Testeur LED v1.7b</title>
+<style>
+:root{--bg:#0d0f14;--fg:#e8eaf0;--mut:#9aa3b5;--card:#1c2130;--bd:#2c3347;--ac:#6ea8ff;--ok:#4cc38a;--ko:#e5605a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px system-ui,sans-serif;padding:20px;max-width:1240px}
+h1{font-size:20px;margin:0 0 4px;font-weight:600}p.sub{margin:0 0 16px;color:var(--mut);line-height:1.4}
+canvas{width:100%;height:80px;background:#000;border-radius:8px;display:block}
+h2{font-size:13px;color:var(--mut);font-weight:600;margin:18px 0 6px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:10px 16px;cursor:pointer;font:inherit}
+button:hover{background:#262d42}button.on{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac) inset}
+button small{display:block;color:var(--mut);font-size:12px}
+button.sm{padding:6px 12px}
+#bar{height:6px;background:var(--card);border-radius:3px;margin-top:10px;overflow:hidden}#bar i{display:block;height:100%;width:0;background:var(--ac)}
+#info{font-family:ui-monospace,monospace;color:var(--mut);margin-top:8px;min-height:1.4em;font-size:13px}
+label{color:var(--mut);font-size:14px}input[type=range]{width:260px;accent-color:var(--ac)}
+input[type=number]{width:80px;padding:6px;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px}
+.panel{background:#131722;border:1px solid var(--bd);border-radius:10px;padding:12px 14px;margin-top:16px}
+#st{display:inline-block;padding:4px 10px;border-radius:999px;background:var(--card);font-size:13px}
+#st.ok{background:#1d3a2c;color:var(--ok)}#st.ko{background:#3d2220;color:var(--ko)}
+#log{font-family:ui-monospace,monospace;font-size:12.5px;background:#080a0e;color:#cfd6e4;padding:10px;border-radius:6px;height:160px;overflow:auto;white-space:pre-wrap;margin-top:8px}
+</style></head><body>
+<h1>Testeur LED v1.7b</h1>
+<p class="sub">Aperçu simulé du bandeau (le vrai code du firmware tourne sur PC) et, en option, pilotage du vrai bandeau par Bluetooth. Le son part au clic, la commande part vers l'ESP32 au même instant (plus le décalage réglé). À ouvrir dans Chrome ou Edge pour le Bluetooth.</p>
+<canvas id="c" width="1200" height="80"></canvas>
+<div id="bar"><i id="p"></i></div><div id="info">Choisis une ambiance puis une animation.</div>
+<h2>Ambiance</h2><div class="row" id="amb"></div>
+<h2>Animations (son du sampler + lumière)</h2><div class="row" id="ani"></div>
+<h2>Décalage de la lumière par rapport au son</h2>
+<div class="row"><input id="lat" type="range" min="-500" max="500" step="10" value="0"><label id="latv">0 ms</label><button class="sm" id="mute">Son actif</button>
+<label>Positif : lumière plus tard. Négatif : lumière plus tôt (le son est retardé).</label></div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Bandeau réel (Bluetooth)</h2>
+  <div class="row"><button id="conn">Connecter le bandeau</button><button class="sm" id="disc">Déconnecter</button><span id="st">Non connecté</span>
+  <label><input type="checkbox" id="send" checked> Envoyer les commandes au bandeau</label></div>
+  <h2>Luminosité (10 à 255, 150 au démarrage de la carte)</h2>
+  <div class="row"><input id="lum" type="range" min="10" max="255" value="150"><strong id="lumv">150</strong>
+    <button class="sm" data-l="100">100</button><button class="sm" data-l="150">150</button><button class="sm" data-l="200">200</button><button class="sm" data-l="255">255</button></div>
+  <label>Visible seulement si une ambiance est allumée. Se remet à 150 au redémarrage de la carte.</label>
+  <h2>Nombre de LEDs (1 à 300)</h2>
+  <div class="row"><input id="leds" type="number" min="1" max="300" value="300"><button class="sm" id="ledsb">Appliquer</button>
+  <button class="sm" id="rtt">Mesurer la latence Bluetooth</button><label id="rttv"></label></div>
+  <div id="log"></div>
+</div>
+
+<script>
+const R=__RUNS__,AUD=__AUDIO__;
+const AMBS=[['off','Off'],['jour','Jour'],['nuit','Nuit'],['vote','Vote']];
+const ANIS=[['loup','Loup','7 s'],['clocher','Clocher','25 s'],['horloge','Horloge','14,5 s'],['tonnerre','Tonnerre','2,2 s'],['violon','Violon','2,3 s']];
+const cv=document.getElementById('c'),cx=cv.getContext('2d');
+const audios={};for(const k in AUD){audios[k]=new Audio(AUD[k]);audios[k].preload='auto'}
+let amb='off',cur='000000',run=null,pending=null,muted=false,lat=0,curAudio=null;
+const $=id=>document.getElementById(id);
+const info=t=>$('info').textContent=t;
+const logEl=$('log');
+function log(m){logEl.textContent+=`[${new Date().toLocaleTimeString()}] ${m}\n`;logEl.scrollTop=logEl.scrollHeight}
+
+/* ---------- affichage ---------- */
+function first(s){return s.length===6?s:s.split('|')[0].split('*')[1]}
+function draw(s){const w=1200/300;
+ if(s.length===6){cx.fillStyle='#'+s;cx.fillRect(0,0,1200,80);return}
+ let x=0;for(const r of s.split('|')){const [n,h]=r.split('*');const wn=n*w;cx.fillStyle='#'+h;cx.fillRect(x,0,wn+.5,80);x+=wn}}
+function frameAt(fr,r){let lo=0,hi=fr.length-1;if(r<fr[0][0])return null;while(lo<hi){const m=(lo+hi+1)>>1;if(fr[m][0]<=r)lo=m;else hi=m-1}return fr[lo][1]}
+
+/* ---------- Bluetooth ---------- */
+const SERVICE='d752c5fb-1380-4cd5-b0ef-cac7d72cff20',RXU='2d30c082-f39f-4ce6-923f-3484ea480596',TXU='9b2f4d3a-5c1e-4a7b-8f6d-1e2c3b4a5d60';
+let dev=null,rx=null,connecting=null,rttWait=null,realStart=null;
+function setSt(t,c){$('st').textContent=t;$('st').className=c||''}
+function isReal(){return rx&&dev&&dev.gatt.connected}
+function onNotif(e){
+ const t=new TextDecoder().decode(e.target.value);
+ let extra='';
+ if(t.startsWith('done:')&&realStart!==null){extra=`  (${((performance.now()-realStart)/1000).toFixed(2)} s après l'envoi`+(run&&run.d?`, simulation ${(run.d.done/1000).toFixed(2)} s`:'')+')';realStart=null}
+ log('ESP32 : '+t+extra);
+ if(t.startsWith('lum:')){const v=parseInt(t.slice(4));if(!isNaN(v)){$('lum').value=v;$('lumv').textContent=v}}
+ if(rttWait&&t.startsWith('lum:')){const w=rttWait;rttWait=null;w(performance.now())}
+}
+async function connectReal(){
+ if(isReal())return true;if(connecting)return connecting;
+ connecting=(async()=>{try{
+  if(!navigator.bluetooth)throw new Error('Web Bluetooth indisponible (ouvre ce fichier dans Chrome ou Edge)');
+  setSt('Connexion...');
+  if(!dev){dev=await navigator.bluetooth.requestDevice({filters:[{services:[SERVICE]}]});
+   dev.addEventListener('gattserverdisconnected',()=>{rx=null;setSt('Non connecté','ko');log('Bandeau déconnecté')})}
+  const srv=await dev.gatt.connect();const svc=await srv.getPrimaryService(SERVICE);rx=await svc.getCharacteristic(RXU);
+  try{const tx=await svc.getCharacteristic(TXU);await tx.startNotifications();tx.addEventListener('characteristicvaluechanged',onNotif);log('Notifications activées (firmware 1.7b)')}
+  catch(e){log('Pas de caractéristique de notification : le firmware n\'est probablement pas la 1.7b')}
+  setSt('Connecté à '+(dev.name||'LoupGarou_LED'),'ok');log('Bandeau connecté');return true;
+ }catch(e){log('Erreur de connexion : '+e.message);setSt('Erreur de connexion','ko');rx=null;return false}finally{connecting=null}})();
+ return connecting;
+}
+async function sendReal(cmd){
+ if(!isReal()){if(!await connectReal())return false}
+ const d=new TextEncoder().encode(cmd);
+ try{if(rx.writeValueWithResponse)await rx.writeValueWithResponse(d);else await rx.writeValue(d);log('Envoyé : '+cmd);return true}
+ catch(e){log('Erreur d\'envoi : '+e.message);return false}
+}
+
+/* ---------- lecture ---------- */
+function start(key,kind,name){
+ const d=R[key];run={d,t0:performance.now(),kind,name,key};
+ const toDevice=isReal()&&$('send').checked;
+ const delayAudio=lat<0?-lat:0, delayDev=lat>0?lat:0;
+ if(kind==='a'){
+  for(const k in audios)audios[k].pause();
+  const a=audios[name];curAudio=a;
+  setTimeout(()=>{a.currentTime=0;a.muted=muted;a.play().catch(()=>{})},delayAudio);
+ }
+ if(toDevice){setTimeout(()=>{realStart=performance.now();sendReal(name)},delayDev)}
+}
+function request(kind,name){
+ const key=kind==='a'?`a:${amb}:${name}`:`t:${amb}>${name}`;
+ if(kind==='t'&&amb===name){if(isReal()&&$('send').checked)sendReal(name);return}
+ if(run){pending={kind,name};info('Firmware occupé, commande mise en attente (la dernière écrase la précédente)');return}
+ start(key,kind,name);
+}
+function finish(){
+ cur=first(run.d.f[run.d.f.length-1][1]);
+ if(run.kind==='t')amb=run.name;
+ info(`${run.kind==='a'?run.name:'ambiance '+run.name} terminé, notification attendue à ${(run.d.done/1000).toFixed(2)} s`);
+ run=null;refresh();
+ if(pending){const p=pending;pending=null;request(p.kind,p.name)}
+}
+function tick(now){
+ if(run){const rel=now-run.t0-(run.kind==='a'&&lat>0?lat:0);
+  const h=rel<0?cur:(frameAt(run.d.f,rel)||cur);draw(h);
+  const total=run.d.done+Math.abs(lat);$('p').style.width=Math.min(100,100*(now-run.t0)/total)+'%';
+  if(run.kind==='a')info(`${run.name}  ${((now-run.t0)/1000).toFixed(2)} s / ${(run.d.done/1000).toFixed(2)} s`);
+  if(now-run.t0>=total)finish();
+ }else{draw(cur);$('p').style.width='0'}
+ requestAnimationFrame(tick)}
+function refresh(){document.querySelectorAll('#amb button').forEach(b=>b.classList.toggle('on',b.dataset.k===amb))}
+
+/* ---------- interface ---------- */
+AMBS.forEach(([k,l])=>{const b=document.createElement('button');b.textContent=l;b.dataset.k=k;b.onclick=()=>request('t',k);$('amb').appendChild(b)});
+ANIS.forEach(([k,l,d])=>{const b=document.createElement('button');b.innerHTML=l+'<small>'+d+'</small>';b.onclick=()=>request('a',k);$('ani').appendChild(b)});
+$('lat').oninput=e=>{lat=+e.target.value;$('latv').textContent=lat+' ms'};
+$('mute').onclick=e=>{muted=!muted;e.target.textContent=muted?'Son coupé':'Son actif';if(curAudio)curAudio.muted=muted};
+$('conn').onclick=connectReal;
+$('disc').onclick=()=>{if(dev&&dev.gatt.connected)dev.gatt.disconnect();rx=null};
+function setLum(v){v=Math.max(10,Math.min(255,parseInt(v)||150));$('lum').value=v;$('lumv').textContent=v;return sendReal('lum:'+v)}
+$('lum').addEventListener('input',()=>$('lumv').textContent=$('lum').value);
+$('lum').addEventListener('change',()=>setLum($('lum').value));
+document.querySelectorAll('[data-l]').forEach(b=>b.onclick=()=>setLum(b.dataset.l));
+$('ledsb').onclick=()=>{const n=Math.max(1,Math.min(300,parseInt($('leds').value)||300));$('leds').value=n;sendReal('leds:'+n)};
+$('rtt').onclick=async()=>{
+ if(!await connectReal())return;
+ const v=$('lum').value,res=[];
+ for(let i=0;i<5;i++){
+  const p=new Promise(r=>{rttWait=r;setTimeout(()=>{if(rttWait===r){rttWait=null;r(null)}},2000)});
+  const t0=performance.now();await sendReal('lum:'+v);const t1=await p;if(t1)res.push(t1-t0);
+ }
+ if(!res.length){$('rttv').textContent=' Pas de réponse (firmware sans notification ?)';return}
+ const avg=res.reduce((a,b)=>a+b)/res.length;
+ $('rttv').textContent=` Aller-retour moyen ${avg.toFixed(0)} ms (min ${Math.min(...res).toFixed(0)}, max ${Math.max(...res).toFixed(0)}). Retard de la lumière estimé : environ ${(avg/2).toFixed(0)} ms.`;
+ log($('rttv').textContent.trim());
+};
+refresh();requestAnimationFrame(tick);
+</script></body></html>
